@@ -6,6 +6,7 @@ package handle
 import "C"
 import (
 	"runtime"
+	"unsafe"
 )
 
 // GoHandle provides a way to pass values that contain Go pointers (pointers to memory allocated by
@@ -15,6 +16,11 @@ import (
 type GoHandle struct {
 	pinner *runtime.Pinner
 	value  *any
+}
+
+// Value gets the handle pointer.
+func (h *GoHandle) Pointer() uintptr {
+	return uintptr(unsafe.Pointer(h.value))
 }
 
 // Value gets the handle value.
