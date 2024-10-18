@@ -18,11 +18,6 @@ type GoHandle struct {
 	value  *any
 }
 
-// Value gets the handle pointer.
-func (h *GoHandle) Pointer() uintptr {
-	return uintptr(unsafe.Pointer(h.value))
-}
-
 // Value gets the handle value.
 func (h *GoHandle) Value() any {
 	return *h.value
@@ -64,3 +59,8 @@ type Handle = GoHandle
 
 // New returns a handle for a given value.
 var New = NewHandle
+
+// Pointer returns an unsafe.Pointer to the handle.
+func Pointer(h *Handle) unsafe.Pointer {
+	return unsafe.Pointer(h)
+}
