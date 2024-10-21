@@ -3,7 +3,6 @@
 
 package handle
 
-import "C"
 import (
 	"hash/maphash"
 	"sync"
