@@ -9,45 +9,47 @@ import (
 	"sync/atomic"
 )
 
-// Represents a slot in the handles slice for concurrent access.
+// slot represents a slot in the handles slice for concurrent access.
 type slot struct {
 	value any
 }
 
-// A mask used to clear the most significant byte of a uint64 value.
+// mask is used to clear the most significant byte of a uint64 value.
 const mask = 0x00FFFFFFFFFFFFFF
 
-// Gets the handle within a list by clearing the most significant byte from the global handle.
+// getLocalHandle clears the most significant byte from the global handle to get the handle within
+// a single list.
 func getLocalHandle(globalHandle uint64) uint64 {
 	return globalHandle & mask
 }
 
-// Creates an uint64 value whose most significant byte represents the index of the list in which the
-// handle is stored. The remaining bytes represent a handle internal to that list.
+// getGlobalHandle creates an uint64 value whose most significant byte represents the index of the
+// list in which the handle is stored. The remaining bytes represent a handle internal to that list.
 func getGlobalHandle(index uint8, internalHandle uint64) uint64 {
 	return uint64(index)<<56 | getLocalHandle(internalHandle)
 }
 
-// The maximum number of released handles to keep for re-use.
+// maxReleased is the maximum number of released handles to keep for re-use.
 const maxReleased = 1000
 
-// An independent list of handles that stores a disjoint set of handles. Needed to avoid contention
-// on a single lock.
+// HandleList is an independent list of handles that stores a disjoint set of handles. Needed to
+// avoid contention on a single lock.
 type HandleList struct {
 	sync.RWMutex
 
 	// The list of handles.
 	handles []*atomic.Pointer[slot]
 
-	// A pool of previously released handle indexes for re-use. A list of
+	// A pool of previously released handle indexes for re-use. A list is used instead of sync.Pool
+	// because sync.Pool creates load contention on a runtime lock.
 	released []uint64
 
 	// An atomic counter storing the length of the handles slice.
 	lenHandles atomic.Uint64
 }
 
-// Initializes a new handle list.
-func NewHandleList(index uint8) *HandleList {
+// NewHandleList initializes a new handle list.
+func NewHandleList() *HandleList {
 	return &HandleList{
 		handles:    make([]*atomic.Pointer[slot], 0),
 		released:   make([]uint64, 0),
@@ -55,7 +57,7 @@ func NewHandleList(index uint8) *HandleList {
 	}
 }
 
-// Creates a new handle internal to this list.
+// NewHandle creates a new handle internal to this list.
 func (l *HandleList) NewHandle(v any) uint64 {
 	// Start from the first handle and iterate until a free slot is found.
 	s := &slot{value: v}
@@ -103,7 +105,7 @@ func (l *HandleList) NewHandle(v any) uint64 {
 	}
 }
 
-// Returns the value referenced by the handle. Panics if the handle is invalid.
+// Value returns the value referenced by the handle. Panics if the handle is invalid.
 func (l *HandleList) Value(h uint64) any {
 	l.RLock()
 	defer l.RUnlock()
@@ -120,7 +122,7 @@ func (l *HandleList) Value(h uint64) any {
 	return v.value
 }
 
-// Invalidates a handle. Panics if the handle is invalid.
+// Delete invalidates a handle. Panics if the handle is invalid.
 func (l *HandleList) Delete(h uint64) {
 	l.RLock()
 	defer l.RUnlock()
@@ -142,8 +144,9 @@ func (l *HandleList) Delete(h uint64) {
 	}
 }
 
-// The number of separate handle lists, must be less than 256 because 8 bits are used to indicate
-// from which list the handle was created. Number can be changed if fewer lists are needed.
+// numLists is the number of separate handle lists, must be less than 256 because 8 bits are used to
+// indicate from which list the handle was created. Number can be changed if fewer lists are needed,
+// but using 256 lists uses the whole of the uint64 space.
 const numLists = 256
 
 var (
@@ -154,21 +157,20 @@ var (
 	nilSlot = &slot{}
 )
 
-// Initializes all the handle lists.
 func init() {
 	for i := range handles {
-		handles[i] = NewHandleList(uint8(i))
+		handles[i] = NewHandleList()
 	}
 }
 
-// Returns a pseudo-random uint64. Fastest random implementation that can be used concurrently and
-// is lock-free. Effectively, it calls runtime.fastrand.
+// Rand64 returns a pseudo-random uint64. Fastest random implementation that can be used
+// concurrently and is lock-free. Effectively, it calls runtime.fastrand.
 func Rand64() uint64 {
 	return new(maphash.Hash).Sum64()
 }
 
-// Provides a way to pass values that contain Go pointers (pointers to memory allocated by Go)
-// between Go and C without breaking the cgo pointer passing rules. A Handle is an integer value
+// Handle provides a way to pass values that contain Go pointers (pointers to memory allocated by
+// Go) between Go and C without breaking the cgo pointer passing rules. A Handle is an integer value
 // that can represent any Go value. A Handle can be passed through C and back to Go, and Go code can
 // use the Handle to retrieve the original Go value.
 //
@@ -177,7 +179,7 @@ func Rand64() uint64 {
 // use as a sentinel in C APIs.
 type Handle uintptr
 
-// Returns a handle for a given value, storing it in a random list.
+// NewHandle returns a handle for a given value, storing it in a random list.
 func NewHandle(v any) Handle {
 	// Use a random value between 0 and 255 to select a list.
 	var listIndex uint8
@@ -189,7 +191,7 @@ func NewHandle(v any) Handle {
 	return Handle(getGlobalHandle(listIndex, handles[listIndex].NewHandle(v)))
 }
 
-// Returns the associated Go value for a valid handle.
+// Value returns the associated Go value for a valid handle.
 //
 // The method panics if the handle is invalid.
 func (h Handle) Value() any {
@@ -198,8 +200,8 @@ func (h Handle) Value() any {
 	return handles[index].Value(localHandle)
 }
 
-// Invalidates a handle. This method should only be called once the program no longer needs to pass
-// the handle to C and the C code no longer has a copy of the handle value.
+// Delete invalidates a handle. This method should only be called once the program no longer needs
+// to pass the handle to C and the C code no longer has a copy of the handle value.
 //
 // The method panics if the handle is invalid.
 func (h Handle) Delete() {
@@ -208,5 +210,5 @@ func (h Handle) Delete() {
 	handles[index].Delete(localHandle)
 }
 
-// Returns a handle for a given value.
+// New returns a handle for a given value.
 var New = NewHandle
